@@ -118,7 +118,7 @@ void setNonTensorConnectedNodes(PartitioningCtx* ctx, std::vector<torch::jit::No
       if (!isTensor(output)) {
         for (auto use : output->uses()) {
           auto node = use.user;
-          if (isConstantOrUninitialized(node) && ctx->shouldNodeRunInTensorRT(node)) {
+          if (!isConstantOrUninitialized(node) && ctx->shouldNodeRunInTensorRT(node)) {
             ctx->setNodeExecutorDecision(node, NodeExecutorDecision::kNON_TENSOR);
             q.push(node);
           }
