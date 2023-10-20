@@ -5,7 +5,6 @@ import logging
 from typing import Any, List, Optional, Sequence, Set, Tuple, Union
 
 import torch
-import torch_tensorrt
 from torch.export import ExportedProgram
 from torch_tensorrt._Device import Device
 from torch_tensorrt._enums import (  # TODO: Should probabably be the TRT EngineCapability Enum
@@ -41,6 +40,8 @@ from torch_tensorrt.dynamo.utils import (
     to_torch_device,
     to_torch_tensorrt_device,
 )
+
+import torch_tensorrt
 
 logger = logging.getLogger(__name__)
 
@@ -177,9 +178,11 @@ def compile_module(
     # Partition module into components that can be TRT-accelerated
     fast_partitioner_failed = False
 
+    logger.info("Beginning TensorRT operator Partitioning Phase")
     # If specified, try using the fast partitioner and fall back to the global one on failure
     if settings.use_fast_partitioner:
         try:
+            logger.info("Partitioning the graph via the fast partitioner")
             partitioned_module = partitioning.fast_partition(
                 gm,
                 verbose=settings.debug,
@@ -189,7 +192,7 @@ def compile_module(
         except torch.fx.passes.splitter_base.FxNetSplitterInternalError:
             logger.error(
                 "Partitioning failed on the subgraph with fast partition. See trace above. "
-                + "Retrying with global partition.",
+                "Retrying with global partition.",
                 exc_info=True,
             )
 
@@ -197,12 +200,18 @@ def compile_module(
             settings.use_fast_partitioner = False
 
     if not settings.use_fast_partitioner:
+        logger.info("Partitioning the graph via the global partitioner")
         partitioned_module = partitioning.global_partition(
             gm,
             verbose=settings.debug,
             min_block_size=settings.min_block_size,
             torch_executed_ops=settings.torch_executed_ops,
         )
+
+    logger.info(
+        "Successfully completed graph partitioning phase. "
+        "Beginning the conversion phase."
+    )
 
     # Store TRT replicas of Torch subgraphs
     trt_modules = {}
@@ -222,14 +231,15 @@ def compile_module(
             to_torch_device(settings.device),
         )
 
+        assert submodule_inputs is not None
+
         logger.debug(
-            "Submodule name: %s\n Input shapes: %s\n %s",
+            "Converting submodule: %s\n Input shapes: %s\n %s",
             str(name),
             [input.shape for input in submodule_inputs],
             str(submodule.graph),
         )
 
-        assert submodule_inputs is not None
         # Handle long/double inputs if requested by the user
         if settings.truncate_long_and_double:
             submodule_inputs = repair_long_or_double_inputs(
